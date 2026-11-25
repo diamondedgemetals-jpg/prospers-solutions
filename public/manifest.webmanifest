@@ -1,0 +1,10 @@
+{
+  "name": "Prospers Solutions",
+  "short_name": "Prospers",
+  "description": "Organize messy folders and get clear answers. Works offline for file organizing.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#2563eb",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

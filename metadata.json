@@ -1,0 +1,6 @@
+{
+  "name": "Agent Parameter Studio",
+  "description": "Interactive JavaScript code refactoring studio for parameterizing Anthropic Beta Agents SDK configurations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
