@@ -646,8 +646,16 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveView('research')}
-            className="text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-2 text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 cursor-pointer"
           >
+            <img
+              src="/icon-192.png"
+              alt=""
+              aria-hidden="true"
+              width={32}
+              height={32}
+              className="w-8 h-8 rounded-lg shadow-sm"
+            />
             Prospers Solutions
           </button>
 
