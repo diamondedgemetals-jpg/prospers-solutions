@@ -9,6 +9,7 @@ import type {
   ScannedFileMeta,
 } from '../types/files';
 import { cleanFileName } from './organizerSafety';
+import { monthFolder, readableDate } from './photoPlanner';
 
 // ---------- Kinds of files ----------
 
@@ -42,7 +43,7 @@ export function kindOf(file: Pick<ScannedFileMeta, 'name' | 'extension'>): { fol
 
 /** Names a person can't read: IMG_4021, PXL_2024..., DSC_0012, Scan_003, Untitled, Document (1) */
 const CRYPTIC =
-  /^(img|image|dsc|dscn|dcim|pxl|mvimg|vid|video|photo|pic|picture|screenshot|screen ?shot|screen recording|scan|scanned|untitled|document|doc|new document|file|download|audio|recording|whatsapp image|whatsapp video)[\s_.\-]*([0-9][0-9_.\-\s]*(at[\s_]*[0-9][0-9_.\s]*)?(am|pm)?)?([\s_-]*(copy|\(\d+\)))*$/i;
+  /^(img|image|dsc|dscn|dcim|pxl|mvimg|vid|video|photo|pic|picture|screenshot|screen ?shot|screen recording|scan|scanned|untitled|document|doc|new document|file|download|audio|recording|whatsapp image|whatsapp video)[\s_.\-]*([0-9][0-9_.\-\s]*(at[\s_]*[0-9][0-9_.\s]*)?(am|pm)?(wa\d+)?)?([\s_-]*(copy|\(\d+\)))*$/i;
 
 /** Find a date written inside a name: 20240312, 2024-03-12, 2024_03_12 */
 export function dateInName(stem: string): string | null {
@@ -82,7 +83,7 @@ export const OFFLINE_QUESTIONS: ClarifyingQuestion[] = [
     id: 'q1',
     question: 'How should we group your files?',
     whyItMatters: 'This decides the main folders you will see.',
-    suggestedOptions: ['By kind (Documents, Photos, Videos...)', 'By year', 'By kind, then by year'],
+    suggestedOptions: ['By kind (Documents, Photos, Videos...)', 'By year', 'By kind, then by year', 'By kind, then by year and month'],
   },
   {
     id: 'q2',
@@ -111,7 +112,7 @@ export const OFFLINE_QUESTIONS: ClarifyingQuestion[] = [
 ];
 
 export interface OfflineChoices {
-  groupBy: 'kind' | 'year' | 'kindThenYear';
+  groupBy: 'kind' | 'year' | 'kindThenYear' | 'kindYearMonth';
   tidyNames: boolean;
   datePrefix: boolean;
   oldFilesAside: boolean;
@@ -133,7 +134,8 @@ const saysNo = (a: string | undefined) => says(a, /^\s*(no|don'?t|do not|keep|le
 export function choicesFromAnswers(answers: Array<string | undefined>): OfflineChoices {
   const [a1, a2, a3, a4, a5] = answers;
   let groupBy: OfflineChoices['groupBy'] = 'kind';
-  if (says(a1, /year|date/)) groupBy = says(a1, /kind|type/) ? 'kindThenYear' : 'year';
+  if (says(a1, /month/)) groupBy = 'kindYearMonth';
+  else if (says(a1, /year|date/)) groupBy = says(a1, /kind|type/) ? 'kindThenYear' : 'year';
   return {
     groupBy,
     tidyNames: a2 ? !saysNo(a2) : DEFAULT_CHOICES.tidyNames,
@@ -185,7 +187,8 @@ export function offlinePlan(files: ScannedFileMeta[], choices: OfflineChoices = 
 
   for (const f of files) {
     const kind = kindOf(f);
-    const date = f.lastModified.slice(0, 10);
+    // Photos: the real 'taken' date when we found one; everything else: last changed
+    const date = (f.takenDate ?? f.lastModified).slice(0, 10);
     const year = /^\d{4}/.test(date) ? date.slice(0, 4) : 'Unknown Year';
 
     // Folder
@@ -200,6 +203,10 @@ export function offlinePlan(files: ScannedFileMeta[], choices: OfflineChoices = 
     } else if (choices.groupBy === 'year') {
       folder = year;
       reason = `Last changed in ${year}`;
+    } else if (choices.groupBy === 'kindYearMonth') {
+      const month = Number(date.slice(5, 7));
+      folder = month ? `${kind.folder}/${year}/${monthFolder(month)}` : `${kind.folder}/${year}`;
+      reason = `${kind.label} from ${month ? readableDate(date) : year}`;
     } else if (choices.groupBy === 'kindThenYear') {
       folder = `${kind.folder}/${year}`;
       reason = `${kind.label} from ${year}`;

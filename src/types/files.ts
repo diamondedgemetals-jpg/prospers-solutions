@@ -10,6 +10,12 @@ export interface ScannedFileMeta {
   isOld?: boolean;
   /** Set when this file is an exact copy of another file in the scan */
   duplicateOfPath?: string;
+  /** Best known date the photo/video was taken, local time "YYYY-MM-DDTHH:mm:ss" (or date only) */
+  takenDate?: string;
+  /** Where takenDate came from: the camera's info, the file name, or the last-changed date */
+  dateSource?: 'camera' | 'name' | 'changed';
+  /** Set when this photo looks like another photo (edited, resized, re-sent, burst) */
+  similarToPath?: string;
 }
 
 export interface ProposedFileCategory {
@@ -40,7 +46,7 @@ export interface FileOrganizationOperation {
   reason: string;
   wasRenamed: boolean;
   approved: boolean;
-  tag?: 'normal' | 'duplicate' | 'archive';
+  tag?: 'normal' | 'duplicate' | 'archive' | 'similar';
 }
 
 export interface FileOrganizationPlanResponse {

@@ -664,6 +664,8 @@ Conduct targeted web verification on this new detail or follow-up question using
           previewSnippet?: string;
           isOld?: boolean;
           duplicateOfPath?: string;
+          takenDate?: string;
+          dateSource?: string;
         }>;
       };
 
@@ -681,6 +683,7 @@ Conduct targeted web verification on this new detail or follow-up question using
         ...(f.previewSnippet ? { snippet: f.previewSnippet.slice(0, 120) } : {}),
         ...(f.isOld ? { notChangedIn12Months: true } : {}),
         ...(f.duplicateOfPath ? { exactCopyOf: f.duplicateOfPath } : {}),
+        ...(f.takenDate ? { photoTakenDate: f.takenDate.slice(0, 10) } : {}),
       }));
       const oldCount = files.filter((f) => f.isOld).length;
       const copyCount = files.filter((f) => f.duplicateOfPath).length;
@@ -851,6 +854,7 @@ Perform your First Assessment now:
           sizeBytes: number;
           lastModified: string;
           previewSnippet?: string;
+          takenDate?: string;
         }>;
         proposedCategories?: Array<{ name: string; description: string }>;
         answers?: Array<{ question: string; answer: string }>;
@@ -889,6 +893,7 @@ Perform your First Assessment now:
           currentPath: f.relativePath || f.name,
           ext: f.extension,
           modifiedDate: f.lastModified.slice(0, 10),
+          ...(f.takenDate ? { photoTakenDate: f.takenDate.slice(0, 10) } : {}),
           ...(f.previewSnippet ? { snippet: f.previewSnippet.slice(0, 100) } : {}),
         }));
 
@@ -909,7 +914,8 @@ ${JSON.stringify(compactBatch, null, 2)}
 Instructions:
 1. Assign EVERY file in this batch (matching exact \`fileId\`) to a clean, well-named \`targetFolder\` (e.g. "Financial & Invoices/2026" or "Photos & Media") grouping similar files together according to the user's answers. Reuse the same folder names across files; do not invent near-duplicate folder names.
 2. Provide a clean \`newFileName\` that strictly follows the user's renaming preference while keeping the original file extension intact. If the user asked NOT to rename files or the filename is already clean, keep \`newFileName\` identical to \`name\`.
-3. Provide a brief 4-10 word \`reason\` explaining the grouping or rename.`;
+3. Provide a brief 4-10 word \`reason\` explaining the grouping or rename.
+4. When a file has \`photoTakenDate\`, that is the real date the photo or video was taken: use it (not modifiedDate) for any date-based folders or date-prefixed names. Month folders should look like "03 - March" so they sort in order.`;
 
         try {
           const response = await generateWithRetryAndFallback(

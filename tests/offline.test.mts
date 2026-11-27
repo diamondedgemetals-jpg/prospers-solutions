@@ -27,7 +27,7 @@ assert.equal(tidyStem('Clean Name'), 'Clean Name');
 
 // answers: buttons and typed words
 assert.deepEqual(choicesFromAnswers(OFFLINE_QUESTIONS.map((q) => q.suggestedOptions[0])), { groupBy: 'kind', tidyNames: true, datePrefix: false, oldFilesAside: true, installersAside: true });
-assert.deepEqual(choicesFromAnswers(OFFLINE_QUESTIONS.map((q) => q.suggestedOptions.at(-1))), { groupBy: 'kindThenYear', tidyNames: false, datePrefix: true, oldFilesAside: false, installersAside: false });
+assert.deepEqual(choicesFromAnswers(OFFLINE_QUESTIONS.map((q) => q.suggestedOptions.at(-1))), { groupBy: 'kindYearMonth', tidyNames: false, datePrefix: true, oldFilesAside: false, installersAside: false });
 assert.equal(choicesFromAnswers(['by year please']).groupBy, 'year');
 assert.equal(choicesFromAnswers([undefined, "don't rename anything"]).tidyNames, false);
 

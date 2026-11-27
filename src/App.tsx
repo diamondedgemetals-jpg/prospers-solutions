@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { saveFile } from './lib/saveFile';
 import { apiFetch, readJson } from './lib/api';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -594,14 +595,9 @@ export default function App() {
       .replace(/^-|-$/g, '')
       .slice(0, 50);
     const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${safeSlug || 'prospers-report'}.md`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    saveFile(blob, `${safeSlug || 'prospers-report'}.md`).catch((err) => {
+      console.error('Could not save report:', err);
+    });
   };
 
   const openSavedReport = (saved: SavedResearchReport) => {

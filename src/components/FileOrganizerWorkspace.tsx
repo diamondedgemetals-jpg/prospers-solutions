@@ -1,3 +1,13 @@
+import { isPhoneApp, saveFile } from "../lib/saveFile";
+import {
+  PHOTO_EXTS,
+  VIDEO_EXTS,
+  bestDate,
+  fingerprintPicture,
+  groupSimilar,
+  readCameraDate,
+} from "../lib/photoTools";
+import { photoPlan } from "../lib/photoPlanner";
 import { apiFetch, readJson } from "../lib/api";
 import {
   choicesFromAnswers,
@@ -20,6 +30,7 @@ import {
   RotateCcw,
   Save,
   Trash2,
+  Images,
   Undo2,
   Upload,
 } from "lucide-react";
@@ -224,15 +235,9 @@ async function writeWithoutOverwrite(
   return name;
 }
 
-function triggerDownload(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+/** Browser: normal download. Phone app: save + Share sheet (see lib/saveFile). */
+function triggerDownload(blob: Blob, fileName: string): Promise<void> {
+  return saveFile(blob, fileName);
 }
 
 export function FileOrganizerWorkspace() {
@@ -299,6 +304,10 @@ export function FileOrganizerWorkspace() {
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
+  const photosInputRef = useRef<HTMLInputElement | null>(null);
+  // "Sort My Photos": when true, the next scan goes straight to a sorted photo plan
+  const photoModeRef = useRef<boolean>(false);
+  const [photoRun, setPhotoRun] = useState<boolean>(false);
 
   useEffect(() => {
     setSavedStyles(loadSavedStyles());
@@ -326,19 +335,29 @@ export function FileOrganizerWorkspace() {
     };
   }, [records]);
 
+  // Photo runs have one folder per month: show just the main groups as tabs (Photos, Review Similar...)
+  const tabFor = (folder: string) => (photoRun ? folder.split("/")[0] : folder);
+
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const op of operations) {
       if (!op.approved) continue;
-      counts.set(op.targetFolder, (counts.get(op.targetFolder) ?? 0) + 1);
+      const tab = photoRun ? op.targetFolder.split("/")[0] : op.targetFolder;
+      counts.set(tab, (counts.get(tab) ?? 0) + 1);
     }
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-  }, [operations]);
+  }, [operations, photoRun]);
+
+  const folderCount = useMemo(
+    () => new Set(operations.filter((o) => o.approved).map((o) => o.targetFolder)).size,
+    [operations],
+  );
 
   const filteredOperations = useMemo(() => {
     if (selectedFolderFilter === "ALL") return operations;
-    return operations.filter((op) => op.targetFolder === selectedFolderFilter);
-  }, [operations, selectedFolderFilter]);
+    return operations.filter((op) => tabFor(op.targetFolder) === selectedFolderFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operations, selectedFolderFilter, photoRun]);
 
   const approvedCount = operations.filter((o) => o.approved).length;
   const renamedCount = operations.filter(
@@ -346,6 +365,8 @@ export function FileOrganizerWorkspace() {
   ).length;
 
   const resetOrganizer = () => {
+    photoModeRef.current = false;
+    setPhotoRun(false);
     setStage("select");
     setRecords([]);
     setRootDirHandle(null);
@@ -426,8 +447,97 @@ export function FileOrganizerWorkspace() {
       const keeper = byId.get(keeperId);
       if (extra && keeper) extra.meta.duplicateOfPath = keeper.pathInRoot;
     }
+    // Real "taken" dates for photos and videos (camera info → file name → last changed)
+    const media = scanned.filter(
+      (r) => PHOTO_EXTS.has(r.meta.extension) || VIDEO_EXTS.has(r.meta.extension),
+    );
+    for (let i = 0; i < media.length; i++) {
+      const r = media[i];
+      const camera = await readCameraDate(r.file, r.meta.extension);
+      const best = bestDate(r.meta.name, r.meta.lastModified, camera);
+      r.meta.takenDate = best.taken;
+      r.meta.dateSource = best.source;
+      if (i % 25 === 0)
+        setScanProgress(`Reading photo dates... ${i + 1} of ${media.length}`);
+    }
+
+    if (photoModeRef.current) {
+      await finishPhotoSort(scanned);
+      return;
+    }
     setScanProgress("");
     setRecords([...scanned]);
+  };
+
+  /** "Sort My Photos": find look-alikes, then go straight to the sorted review screen. */
+  const finishPhotoSort = async (scanned: LocalFileRecord[]) => {
+    const pictures = scanned.filter(
+      (r) =>
+        !r.meta.duplicateOfPath &&
+        PHOTO_EXTS.has(r.meta.extension) &&
+        !/^(screen ?shot|screenshot|scan)/i.test(r.meta.name),
+    );
+    const candidates = [];
+    for (let i = 0; i < pictures.length; i++) {
+      const r = pictures[i];
+      if (i % 10 === 0)
+        setScanProgress(`Comparing photos for look-alikes... ${i + 1} of ${pictures.length}`);
+      const fingerprint = await fingerprintPicture(r.file, r.meta.extension);
+      if (fingerprint) {
+        candidates.push({
+          id: r.meta.id,
+          fingerprint,
+          sizeBytes: r.meta.sizeBytes,
+          taken: r.meta.takenDate ?? "",
+          hasCameraDate: r.meta.dateSource === "camera",
+        });
+      }
+    }
+    const byId = new Map(scanned.map((r) => [r.meta.id, r]));
+    for (const [extraId, keeperId] of groupSimilar(candidates)) {
+      const extra = byId.get(extraId);
+      const keeper = byId.get(keeperId);
+      if (extra && keeper) {
+        extra.meta.similarToPath = keeper.pathInRoot;
+        // Editing or re-sending often removes the camera info: use the original's date instead
+        if (extra.meta.dateSource !== "camera" && keeper.meta.takenDate) {
+          extra.meta.takenDate = keeper.meta.takenDate;
+          extra.meta.dateSource = keeper.meta.dateSource;
+        }
+      }
+    }
+
+    const plan = photoPlan(scanned.map((r) => r.meta));
+    const ops: FileOrganizationOperation[] = plan.operations.map((op) => {
+      const meta = byId.get(op.fileId)?.meta;
+      return {
+        ...op,
+        approved: true,
+        tag: meta?.duplicateOfPath ? "duplicate" : meta?.similarToPath ? "similar" : "normal",
+      };
+    });
+    setRecords([...scanned]);
+    setPlanSummary(plan.planSummary);
+    setOperations(makeDestinationsUnique(ops));
+    setSelectedFolderFilter("ALL");
+    setOfflineReason("private");
+    setPhotoRun(true);
+    setScanProgress("");
+    setStage("review");
+  };
+
+  /** One tap: pick photos, then everything else happens automatically. */
+  const startPhotoSort = () => {
+    resetOrganizer();
+    photoModeRef.current = true;
+    const win = window as DirectoryPickerWindow;
+    // Computers with Chrome/Edge: pick a whole folder (also allows organizing in place)
+    if (typeof win.showDirectoryPicker === "function" && !isPhoneApp()) {
+      void handlePickDeviceFolder();
+    } else {
+      // Phones and other browsers: the photo picker
+      photosInputRef.current?.click();
+    }
   };
 
   const buildRecord = async (
@@ -961,6 +1071,20 @@ export function FileOrganizerWorkspace() {
     const { ops, byId } = finalApprovedOps();
     if (ops.length === 0 || isBuildingZip) return;
 
+    // A ZIP is built in memory: phones run out far sooner than computers
+    const totalBytes = ops.reduce((sum, op) => sum + (byId.get(op.fileId)?.file.size ?? 0), 0);
+    const limit = isPhoneApp() ? 400 * 1024 * 1024 : 1536 * 1024 * 1024;
+    if (totalBytes > limit) {
+      setErrorMessage(
+        `That's ${formatBytes(totalBytes)}, too much to save as one ZIP on this device. ` +
+          (rootDirHandle
+            ? 'Use "Organize Inside My Folder" instead, or '
+            : "Please ") +
+          `pick fewer at a time (for example, one year of photos), then run it again. Nothing was changed.`,
+      );
+      return;
+    }
+
     setIsBuildingZip(true);
     setErrorMessage("");
 
@@ -993,7 +1117,7 @@ export function FileOrganizerWorkspace() {
         (folderLabel || "Organized-Files")
           .replace(/[^a-zA-Z0-9_-]+/g, "-")
           .replace(/^-|-$/g, "") || "Organized-Files";
-      triggerDownload(blob, `${safeName}-Prospers.zip`);
+      await triggerDownload(blob, `${safeName}-Prospers.zip`);
 
       setAppliedEntries([]);
       setAppliedRunFolder("");
@@ -1028,10 +1152,16 @@ export function FileOrganizerWorkspace() {
     zip.file("Undo-Organize.ps1", scripts.undoWindows);
     zip.file("Undo-Organize.sh", scripts.undoMac);
     zip.file("README.txt", SCRIPTS_README);
-    triggerDownload(
-      await zip.generateAsync({ type: "blob" }),
-      "Prospers-Organize-and-Undo.zip",
-    );
+    try {
+      await triggerDownload(
+        await zip.generateAsync({ type: "blob" }),
+        "Prospers-Organize-and-Undo.zip",
+      );
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : "Could not save the files.",
+      );
+    }
   };
 
   const allFiveAnswered = questions.every(
@@ -1064,6 +1194,22 @@ export function FileOrganizerWorkspace() {
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {
             ingestFileList(e.target.files);
+          }
+          e.target.value = "";
+        }}
+      />
+
+      <input
+        ref={photosInputRef}
+        type="file"
+        multiple
+        accept="image/*,video/*"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            ingestFileList(e.target.files, "Your photos");
+          } else {
+            photoModeRef.current = false;
           }
           e.target.value = "";
         }}
@@ -1106,6 +1252,54 @@ export function FileOrganizerWorkspace() {
               tidy, clearly named folders.
             </p>
           </section>
+
+          {/* ONE TAP: Sort My Photos */}
+          <section
+            aria-labelledby="sort-photos-title"
+            className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+              <div className="flex-1 space-y-1.5">
+                <h2
+                  id="sort-photos-title"
+                  className="text-xl font-bold text-slate-900 flex items-center gap-2"
+                >
+                  <Images className="w-5 h-5 text-blue-600" aria-hidden="true" />
+                  Sort My Photos
+                </h2>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  One tap: puts your photos in order by the date they were
+                  taken, in year and month folders, and sets aside copies and
+                  look-alikes. Nothing is deleted, and your photos never leave
+                  this device.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={startPhotoSort}
+                disabled={!!scanProgress}
+                className="inline-flex items-center justify-center gap-2 px-7 py-4 text-base font-semibold text-white bg-blue-600 rounded-2xl hover:bg-blue-700 disabled:opacity-60 transition-colors shrink-0 cursor-pointer"
+              >
+                {scanProgress && photoModeRef.current ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Images className="w-5 h-5" />
+                )}
+                <span>{scanProgress && photoModeRef.current ? "Sorting..." : "Sort My Photos"}</span>
+              </button>
+            </div>
+            {scanProgress && photoModeRef.current && (
+              <p role="status" className="mt-4 text-sm text-slate-700 tabular-nums">
+                {scanProgress}
+              </p>
+            )}
+          </section>
+
+          <div className="flex items-center gap-3 text-xs text-slate-400" aria-hidden="true">
+            <div className="flex-1 border-t border-slate-200" />
+            <span>or organize any other files</span>
+            <div className="flex-1 border-t border-slate-200" />
+          </div>
 
           <section className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-6">
             {/* Saved Filing Styles */}
@@ -1207,7 +1401,10 @@ export function FileOrganizerWorkspace() {
               <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
                 <button
                   type="button"
-                  onClick={handlePickDeviceFolder}
+                  onClick={() => {
+                    photoModeRef.current = false;
+                    void handlePickDeviceFolder();
+                  }}
                   className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-blue-600 rounded-xl hover:bg-blue-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <FolderInput className="w-4 h-4" />
@@ -1215,7 +1412,10 @@ export function FileOrganizerWorkspace() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => filesInputRef.current?.click()}
+                  onClick={() => {
+                    photoModeRef.current = false;
+                    filesInputRef.current?.click();
+                  }}
                   className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-slate-800 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Upload className="w-4 h-4" />
@@ -1241,7 +1441,7 @@ export function FileOrganizerWorkspace() {
               )}
             </div>
 
-            {scanProgress && (
+            {scanProgress && !photoModeRef.current && (
               <div
                 className="flex items-center gap-2 text-sm text-slate-700"
                 role="status"
@@ -1651,16 +1851,18 @@ export function FileOrganizerWorkspace() {
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-200">
               <div className="space-y-2 max-w-2xl">
                 <div className="flex items-center gap-2 text-xs text-emerald-700 font-medium tabular-nums">
-                  <span>Organization Blueprint Ready</span>
+                  <span>Ready to save</span>
                   <span aria-hidden="true">·</span>
                   <span>{approvedCount} files selected</span>
                   <span aria-hidden="true">·</span>
-                  <span>{categoryCounts.length} folders</span>
+                  <span>{folderCount} folders</span>
                   <span aria-hidden="true">·</span>
                   <span>{renamedCount} renamed</span>
                 </div>
                 <h2 className="text-2xl font-bold text-slate-900">
-                  Review &amp; Save Your Organized Folders
+                  {photoRun
+                    ? "Your photos are sorted. Save them below."
+                    : "Review & Save Your Organized Folders"}
                 </h2>
                 <p className="text-sm text-slate-600 leading-relaxed">
                   {planSummary}
@@ -1763,9 +1965,9 @@ export function FileOrganizerWorkspace() {
                   <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
                     <th className="py-3 px-4 w-10">Include</th>
                     <th className="py-3 px-4">Original File</th>
-                    <th className="py-3 px-4">New Category Folder</th>
-                    <th className="py-3 px-4">New Filename (Editable)</th>
-                    <th className="py-3 px-4">Reason</th>
+                    <th className="py-3 px-4 hidden sm:table-cell">New Category Folder</th>
+                    <th className="py-3 px-4 hidden sm:table-cell">New Filename (Editable)</th>
+                    <th className="py-3 px-4 hidden sm:table-cell">Reason</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1788,13 +1990,20 @@ export function FileOrganizerWorkspace() {
                           className="w-4 h-4 rounded border-slate-300 text-blue-600"
                         />
                       </td>
-                      <td className="py-3 px-4 font-mono text-xs text-slate-600 max-w-[220px] truncate">
-                        {op.originalPath}
+                      <td className="py-3 px-4 font-mono text-xs text-slate-600 sm:max-w-[220px] sm:truncate">
+                        <span className="block truncate">{op.originalPath}</span>
+                        {/* Phones: the other columns are hidden, so say where it goes right here */}
+                        <span className="sm:hidden mt-1 block font-sans text-sm text-slate-900 break-words">
+                          → {op.targetFolder}/{op.newFileName}
+                        </span>
+                        <span className="sm:hidden mt-0.5 block font-sans text-xs text-slate-500">
+                          {op.reason}
+                        </span>
                       </td>
-                      <td className="py-3 px-4 font-medium text-slate-900 whitespace-nowrap">
+                      <td className="py-3 px-4 font-medium text-slate-900 whitespace-nowrap hidden sm:table-cell">
                         {op.targetFolder}
                       </td>
-                      <td className="py-3 px-4">
+                      <td className="py-3 px-4 hidden sm:table-cell">
                         <input
                           type="text"
                           value={op.newFileName}
@@ -1815,10 +2024,15 @@ export function FileOrganizerWorkspace() {
                           className="w-full min-w-[180px] px-2.5 py-1 text-xs font-mono bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:border-blue-600"
                         />
                       </td>
-                      <td className="py-3 px-4 text-xs text-slate-500">
+                      <td className="py-3 px-4 text-xs text-slate-500 hidden sm:table-cell">
                         {op.tag === "duplicate" && (
                           <span className="block font-semibold text-amber-700">
                             Exact copy
+                          </span>
+                        )}
+                        {op.tag === "similar" && (
+                          <span className="block font-semibold text-amber-700">
+                            Looks alike
                           </span>
                         )}
                         {op.tag === "archive" && (
@@ -1835,20 +2049,24 @@ export function FileOrganizerWorkspace() {
             </div>
 
             <div className="flex items-center justify-between pt-2">
-              <button
-                type="button"
-                onClick={() => setStage("questions")}
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-              >
-                ← Adjust My 5 Answers
-              </button>
+              {photoRun ? (
+                <span />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setStage("questions")}
+                  className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                >
+                  ← Adjust My 5 Answers
+                </button>
+              )}
               <button
                 type="button"
                 onClick={resetOrganizer}
                 className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Start Over With Another Folder</span>
+                <span>{photoRun ? "Sort Different Photos" : "Start Over With Another Folder"}</span>
               </button>
             </div>
           </section>
