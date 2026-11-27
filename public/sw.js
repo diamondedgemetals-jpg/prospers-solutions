@@ -1,6 +1,6 @@
 // Saves the app on the device after the first visit, so the File Organizer opens without internet.
 // Server answers (/api/...) are never saved: they always come fresh from the server.
-const CACHE = 'prospers-app-v2';
+const CACHE = 'prospers-app-v3';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.png', '/apple-touch-icon.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
